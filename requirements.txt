@@ -1,0 +1,12 @@
+# For CUDA machines (e.g. Colab / Linux): install torch for your CUDA version first, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements.txt
+numpy>=1.26
+scipy>=1.11
+scikit-image>=0.22
+matplotlib>=3.8
+pillow>=10
+numba>=0.59
+bm3d>=4.0.3
+tqdm
+torch>=2.3

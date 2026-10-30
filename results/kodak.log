@@ -1,0 +1,2 @@
+case1 kodim01 Haar-tSVD       31.89 0.9113 3.8s
+case1 kodim01 Local-tSVD+PCA  31.69 0.9041 16.1s
