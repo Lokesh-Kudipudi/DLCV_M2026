@@ -12,27 +12,54 @@ curl -s "https://api.github.com/repos/csjunxu/PolyU-Real-World-Noisy-Images-Data
   | python3 -c "import sys,json; [print(x['download_url']) for x in json.load(sys.stdin)]" \
   | (cd data/polyu && xargs -n 1 -P 16 curl -sfLO)
 if [[ "${SIDD:-0}" == "1" && ! -f data/sidd/ValidationGtBlocksSrgb.mat ]]; then
-  # The official SIDD server is offline; this is the test.zip of the Restormer repo, which holds the
-  # unmodified ValidationNoisyBlocksSrgb.mat / ValidationGtBlocksSrgb.mat under test/SIDD/.
-  # gdown handles Google Drive's confirmation page; plain curl is the fallback.
   mkdir -p data/sidd
+  python3 -m pip install -q gdown lmdb >/dev/null 2>&1 || true
+  # 1) Google Drive: test.zip of the Restormer repo (the official SIDD server is offline), which holds
+  #    the unmodified ValidationNoisyBlocksSrgb.mat / ValidationGtBlocksSrgb.mat under test/SIDD/.
+  #    Often fails with "quota exceeded".
   ID=11vfqV-lqousZTuAit1Qkqghiv_taY0KZ
-  python3 -m pip install -q gdown >/dev/null 2>&1 || true
-  python3 -m gdown "$ID" -O data/sidd/test.zip \
-    || curl -fL -o data/sidd/test.zip "https://drive.usercontent.google.com/download?id=$ID&export=download&confirm=t"
+  python3 -m gdown "$ID" -O data/sidd/test.zip || true
+  # 2) Fallback: the same 1280 blocks as lossless PNGs in BasicSR/NAFNet LMDBs on Hugging Face.
+  if ! python3 -c "import zipfile,sys; sys.exit(not zipfile.is_zipfile('data/sidd/test.zip'))" 2>/dev/null; then
+    echo "Google Drive failed; using the Hugging Face LMDB copy"
+    HF=https://huggingface.co/datasets/talib-sid/sidd-val/resolve/main/val
+    for d in input_crops gt_crops; do
+      mkdir -p data/sidd/$d.lmdb
+      curl -fL -o data/sidd/$d.lmdb/data.mdb "$HF/$d.lmdb/data.mdb"
+    done
+  fi
   python3 - <<'PY'
-import shutil, sys, zipfile
-path = "data/sidd/test.zip"
-if not zipfile.is_zipfile(path):
-    sys.exit("SIDD download is not a zip (Google Drive quota or confirmation page?). First bytes:\n"
-             + open(path, "rb").read(400).decode("utf-8", "replace"))
-with zipfile.ZipFile(path) as z:
-    for n in z.namelist():
-        if n.startswith("test/SIDD/") and n.endswith(".mat"):
-            with z.open(n) as src, open("data/sidd/" + n.split("/")[-1], "wb") as dst:
-                shutil.copyfileobj(src, dst)
+import os, shutil, zipfile
+import numpy as np
+from scipy.io import savemat
+D = "data/sidd/"
+if zipfile.is_zipfile(D + "test.zip"):
+    with zipfile.ZipFile(D + "test.zip") as z:
+        for n in z.namelist():
+            if n.startswith("test/SIDD/") and n.endswith(".mat"):
+                with z.open(n) as src, open(D + n.split("/")[-1], "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+else:
+    # Rebuild the two (40, 32, 256, 256, 3) uint8 arrays; block k -> (k // 32, k % 32). Noisy and
+    # clean are paired by the same key, so the averages do not depend on that order.
+    import io
+    import lmdb
+    from PIL import Image
+    out = {}
+    for d, key in (("input_crops", "ValidationNoisyBlocksSrgb"), ("gt_crops", "ValidationGtBlocksSrgb")):
+        arr = np.zeros((40, 32, 256, 256, 3), np.uint8)
+        with lmdb.open(D + d + ".lmdb", readonly=True, lock=False, subdir=True).begin() as txn:
+            for k in range(1280):
+                buf = txn.get(f"ValidationBlocksSrgb_{k}".encode()) or txn.get(f"ValidationBlocksSrgb_{k}.png".encode())
+                arr[k // 32, k % 32] = np.asarray(Image.open(io.BytesIO(buf)).convert("RGB"))
+        savemat(D + key + ".mat", {key: arr}, do_compression=False)
+        out[key] = arr
+        shutil.rmtree(D + d + ".lmdb")
+    mse = np.mean((out["ValidationNoisyBlocksSrgb"].astype(float) - out["ValidationGtBlocksSrgb"]) ** 2, axis=(2, 3, 4))
+    print(f"SIDD val noisy PSNR {np.mean(10 * np.log10(255 ** 2 / mse)):.2f} dB (expected about 23.7)")
+if os.path.exists(D + "test.zip"):
+    os.remove(D + "test.zip")
 PY
-  rm data/sidd/test.zip
   echo "sidd: $(ls data/sidd)"
 fi
 echo "kodak: $(ls data/kodak | wc -l) files, polyu: $(ls data/polyu | wc -l) files (expect 24 and 200)"

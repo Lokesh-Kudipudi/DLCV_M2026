@@ -11,12 +11,16 @@ export HAARTSVD_DEVICE="${HAARTSVD_DEVICE:-cuda}"
 PY="${PYTHON:-uv run python}"
 mkdir -p results
 
-SIDD=1 bash scripts/setup_data.sh
+SIDD=1 bash scripts/setup_data.sh || echo "** SIDD download failed: continuing without SIDD (rerun this script later) **"
 $PY scripts/check_device.py
 [[ "${FULL:-0}" == "1" ]] && PYTHON="$PY" bash scripts/run_all.sh "$HAARTSVD_DEVICE"
 
 $PY experiments/noise_est.py --part kodak 2>&1 | tee results/noise_est_kodak.log
 $PY experiments/noise_est.py --part polyu --cbm3d 2>&1 | tee results/noise_est_polyu.log
-$PY experiments/sidd.py ${ORACLE:+--oracle} 2>&1 | tee results/sidd.log
+if [[ -f data/sidd/ValidationGtBlocksSrgb.mat ]]; then
+  $PY experiments/sidd.py ${ORACLE:+--oracle} 2>&1 | tee results/sidd.log
+else
+  echo "** no SIDD data: skipped sidd.py **"
+fi
 $PY scripts/fill_report_tables.py > /dev/null || true
 echo "done: git add results && git commit -m 'Final-phase results' && git push"
