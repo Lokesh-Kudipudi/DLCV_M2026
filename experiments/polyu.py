@@ -14,7 +14,7 @@ from common import METHODS, RESULTS, haar, md_table, run, summarize, write_csv
 from haartsvd import haar_tsvd
 from haartsvd.utils import estimate_sigma, polyu, psnr, save, ssim
 
-KAPPAS = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+KAPPAS = [8.0, 10.0, 12.0, 14.0, 16.0, 20.0, 24.0]  # widened twice from {1.0..4.0}; see report 6.2
 ORACLE = [2, 3, 4, 5, 6, 8, 10, 12, 15]
 N_VAL = 10
 

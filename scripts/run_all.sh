@@ -18,3 +18,6 @@ $PY experiments/kodak.py --methods "${METHODS[@]}" 2>&1 | tee results/kodak.log
 $PY experiments/polyu.py --methods "${METHODS[@]}" 2>&1 | tee results/polyu.log
 $PY experiments/ablations.py 2>&1 | tee results/ablations.log
 $PY experiments/figures.py 2>&1 | tee results/figures.log
+$PY experiments/polyu_extra.py --part cbm3d 2>&1 | tee results/polyu_cbm3d.log
+$PY experiments/polyu_extra.py --part oracle 2>&1 | tee results/polyu_oracle.log
+$PY scripts/fill_report_tables.py 2>&1 | tee results/fill_report_tables.log

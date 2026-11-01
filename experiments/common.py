@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 from haartsvd import Params, haar_tsvd  # noqa: E402
 from haartsvd.utils import psnr, ssim  # noqa: E402
 
-RESULTS = ROOT / "results"
+RESULTS = Path(os.environ.get("HAARTSVD_RESULTS", ROOT / "results"))  # override for smoke tests
 TAU_SCALE = 0.45  # tuned on kodim01 / kodim13 (Kodak case 1 and 2), see README
 # torch device for Haar-tSVD: auto (cuda > mps > cpu) | cuda | mps | cpu | numpy
 DEVICE = os.environ.get("HAARTSVD_DEVICE", "auto")
