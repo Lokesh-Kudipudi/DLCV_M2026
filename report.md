@@ -1,6 +1,6 @@
 # Haar-tSVD: One-Step Image Denoising Using Haar Transform and Tensor SVD
 
-## Progress Report: Implementation, Replication and Preliminary Results
+## Final Report: Implementation, Replication and Evaluation
 
 **Lokesh Kudipudi** — lokesh.k23@iiits.in
 **Bharghava Reddy Sathi** — bharghavareddy.s23@iiits.in
@@ -8,25 +8,25 @@
 
 Indian Institute of Information Technology Sri City, Chittor
 
-> All numbers labelled "this work" come from the CSV files in `results/` produced on Google Colab (Tesla T4); values labelled "reported in [22]" are copied from the paper.
+> Numbers labelled "this work" in Sections 5–6 were produced on Google Colab (Tesla T4); Section 7 was produced on an RTX 3090 (see Section 7.1 for why PolyU differs between the two). The CSV files in `results/` are from the RTX 3090 run. Values labelled "reported in [22]" are copied from the paper.
 
 ---
 
 ## Abstract
 
-This report documents our implementation of Haar-tSVD [22], a training-free, one-step image denoiser that combines one pair of globally shared t-SVD bases with a fixed Haar transform along the grouping dimension. We implemented the full pipeline (GCP patch matching, global/local/reused t-SVD bases, Haar/PCA/identity group transforms, hard thresholding, aggregation, MAD noise estimation) with NumPy, MPS and CUDA backends, and replaced the paper's CNN noise estimator by a scaled MAD estimate. On Kodak case 1 / case 2 we obtain 33.99 / 28.76 dB against 33.69 / 29.07 dB for CBM3D (the paper reports 34.13 / 29.16 dB for Haar-tSVD), so the advantage over CBM3D is reproduced at moderate noise but not at high noise. On PolyU we obtain 38.76 dB against 38.52 dB for CBM3D (paper: 38.78 dB), with σ = κ · MAD and κ = 24 tuned on ten held-out images; a per-image oracle σ gives at least 39.18 dB, and the MAD estimate fails (σ = 0) on 9 of 90 images. Shared or reused bases are as good as locally learned ones (within 0.02 dB in case 1, +0.33 dB in case 2), and with them the Haar filter stage takes 0.08 s on a 512×512 image on a T4 GPU, 3.6× faster than with local bases; the whole denoiser takes 0.89 s against 36.6 s for CPU CBM3D. With global bases, Haar beats PCA by 0.3–0.9 dB at our shared threshold scale, but this is mostly calibration: with its own best σ, PCA is 0.17 dB ahead, and Haar degrades faster when σ is overestimated.
+This report documents our implementation of Haar-tSVD [22], a training-free, one-step image denoiser that combines one pair of globally shared t-SVD bases with a fixed Haar transform along the grouping dimension. We implemented the full pipeline (GCP patch matching, global/local/reused t-SVD bases, Haar/PCA/identity group transforms, hard thresholding, aggregation, MAD noise estimation) with NumPy, MPS and CUDA backends, and replaced the paper's CNN noise estimator by a scaled MAD estimate. On Kodak case 1 / case 2 we obtain 33.99 / 28.76 dB against 33.69 / 29.07 dB for CBM3D (the paper reports 34.13 / 29.16 dB for Haar-tSVD), so the advantage over CBM3D is reproduced at moderate noise but not at high noise. On PolyU we obtain 38.76 dB against 38.52 dB for CBM3D (paper: 38.78 dB), with σ = κ · MAD and κ = 24 tuned on ten held-out images; a per-image oracle σ gives at least 39.18 dB, and the MAD estimate fails (σ = 0) on 9 of 90 images. Shared or reused bases are as good as locally learned ones (within 0.02 dB in case 1, +0.33 dB in case 2), and with them the Haar filter stage takes 0.08 s on a 512×512 image on a T4 GPU, 3.6× faster than with local bases; the whole denoiser takes 0.89 s against 36.6 s for CPU CBM3D. With global bases, Haar beats PCA by 0.3–0.9 dB at our shared threshold scale, but this is mostly calibration: with its own best σ, PCA is 0.17 dB ahead, and Haar degrades faster when σ is overestimated. A σ floor tuned on validation adds 0.37 dB on PolyU, mostly from images where MAD = 0, while the PCA estimator of Chen et al. gives no further gain. On SIDD validation we obtain 33.56 dB against 33.31 dB for CBM3D, both about 1.5 dB below the values reported in [22]. We conclude that the fixed Haar transform and shared bases hold up, and that the weak point of a blind pipeline without the CNN is setting σ on real noise.
 
 ---
 
-## 1. Introduction and Progress Since the Preliminary Report
+## 1. Introduction
 
-The preliminary report defined the problem of training-free, one-step denoising, reviewed the literature, and summarised Haar-tSVD [22]. Since then we have (i) implemented the method, (ii) replaced the paper's CNN noise estimator by a classical one, (iii) run the Kodak and PolyU experiments and the ablations that answer RQ1–RQ3, and (iv) extended the literature review with noise-level estimation, real-noise modelling and zero-shot denoisers (Section 3).
+This project studies training-free, one-step image denoising through Haar-tSVD [22]. We (i) implemented the method, (ii) replaced the paper's CNN noise estimator by classical ones, (iii) ran the Kodak and PolyU experiments and the ablations that answer RQ1–RQ3, (iv) compared noise estimators and validated on SIDD, and (v) reviewed the literature on noise-level estimation, real-noise modelling and zero-shot denoisers (Section 3).
 
-Section 2 restates the problem and research questions in brief, Section 3 extends the literature review, Section 4 describes the implementation and deviations from the paper, Section 5 replicates results reported in [22], Section 6 gives our own results, Section 7 discusses gaps and open issues, and Section 8 outlines the final phase.
+Section 2 states the problem and research questions, Section 3 reviews the literature, Section 4 describes the implementation and deviations from the paper, Section 5 replicates results reported in [22], Section 6 gives our own results, Section 7 evaluates noise estimators and SIDD, Section 8 discusses the gaps, Section 9 concludes, and Section 10 lists future work.
 
 ---
 
-## 2. Problem and Research Questions (Recap)
+## 2. Problem and Research Questions
 
 Given a noisy colour image Y = X + N, where N is zero-mean noise with standard deviation σ (white Gaussian for synthetic data, an effective level for real camera noise), the task is to estimate the clean image X, measured by PSNR and SSIM. The denoiser must be *one-step* (each group of similar patches gets a single forward transform, threshold and inverse transform, with no iterative optimisation) and *training-free* (no paired data, no network training and no per-group basis learning). The full formal statement is Section 2 of the preliminary report. The research questions are:
 
@@ -38,7 +38,7 @@ The adaptive variants of [22] (A-Haar-tSVD with a CNN noise estimator, RA-Haar-t
 
 ---
 
-## 3. Further Literature Review
+## 3. Literature Review
 
 ### 3.1 Noise-level estimation (replacing the paper's CNN)
 
@@ -48,7 +48,7 @@ Haar-tSVD takes σ as an input: it sets the hard threshold τ. The paper obtains
 
 **Liu, Tanaka and Okutomi [37]** pick weak-texture patches using gradient-covariance statistics and estimate σ by PCA on those patches (the smallest eigenvalue of the patch covariance), iterating the selection with the current σ. They also argue that the best σ to give a non-blind denoiser is not always the true σ and should depend on scene complexity, which supports tuning a multiplier on our estimate (our κ, Section 4).
 
-**Pyatykh, Hesser and Zheng [38]** show that, for block-based PCA, the noise variance can be read from the smallest eigenvalue of the block covariance. **Chen, Zhu and Heng [39]** observe that this underestimates σ and correct it by a statistical analysis of the eigenvalues of the redundant dimensions, selecting the redundant subspace by a model-selection argument; the paper also reports that BM3D achieves optimal performance with their estimate. This is our planned replacement for MAD in the final phase (Section 8), since it is closed-form and training-free.
+**Pyatykh, Hesser and Zheng [38]** show that, for block-based PCA, the noise variance can be read from the smallest eigenvalue of the block covariance. **Chen, Zhu and Heng [39]** observe that this underestimates σ and correct it by a statistical analysis of the eigenvalues of the redundant dimensions, selecting the redundant subspace by a model-selection argument; the paper also reports that BM3D achieves optimal performance with their estimate. This is the alternative to MAD that we evaluate in Section 7.2, since it is closed-form and training-free.
 
 *Why MAD underestimates real sRGB noise (our reasoning; the oracle results of Section 6.2 are consistent with it but do not prove it).* Camera noise in sRGB images passes through demosaicking, white balance and JPEG, which make it spatially and cross-channel correlated [42]. Correlated noise carries most of its energy at low and mid frequencies, so the finest wavelet band sees less than the total noise variance and MAD returns a σ̂ below the σ that the thresholds need. A multiplicative correction κ > 1 on σ̂ compensates for this on average, which is why we tune κ on PolyU (Section 6). The PolyU inputs are JPEG files, and quantisation in JPEG plausibly removes even more of the finest-band energy.
 
@@ -73,7 +73,7 @@ Haar-tSVD takes σ as an input: it sets the hard threshold τ. The paper obtains
 Table IV of [22] compares against several methods that need no clean targets; we add ZS-N2N, which [22] does not include, as a representative zero-shot baseline. They are positioned against our setting, "no paired data and no optimisation at all", as follows.
 
 - **ZS-N2N (Mansour and Heckel [43]).** A 2-layer convolutional network (about 20k parameters) is trained from scratch on the single noisy test image, using two down-sampled versions of it as a Noise2Noise-style pair plus a consistency loss. It needs no noise model and runs on a CPU, but assumes pixel-wise independent noise and still performs per-image optimisation. It is not among the baselines of [22].
-- **Noise2VST (Herbreteau and Unser [44]).** Learns a model-free variance-stabilising transform, a piecewise-linear function whose parameters are fitted with a self-supervised loss on the noisy image alone, so that an off-the-shelf Gaussian denoiser can be applied to real noise. It is conceptually the closest to our final-phase direction (VST + Gaussian denoiser), but it depends on a pretrained Gaussian denoiser and optimises per image.
+- **Noise2VST (Herbreteau and Unser [44]).** Learns a model-free variance-stabilising transform, a piecewise-linear function whose parameters are fitted with a self-supervised loss on the noisy image alone, so that an off-the-shelf Gaussian denoiser can be applied to real noise. It is conceptually the closest to a VST-based extension of this work (Section 10), but it depends on a pretrained Gaussian denoiser and optimises per image.
 - **Pixel2Pixel (Ma et al. [45]).** For every pixel it collects the most similar pixels from a surrounding region into a pixel bank and samples from it to form many noisy versions of the image with the same signal and independent noise, which are used to train a compact network on the single test image. It needs no noise model, but optimises per image.
 - **Blind2Unblind (Wang et al. [27]).** Self-supervised, uses blind spots made visible by a masking scheme and is trained on a set of noisy images, so it needs data but no clean targets. In [22] it reaches 29.91 dB on Kodak case 1 and 38.25 dB on PolyU, against 34.13 and 38.78 for Haar-tSVD (as reported in [22]).
 
@@ -81,7 +81,7 @@ The observation from Table IV of [22] is that most of these methods are weak on 
 
 ### 3.5 Evaluation protocols
 
-- **SIDD [1].** We would use the validation split (`ValidationNoisyBlocksSrgb.mat`) with the matching ground-truth blocks. Numbers from the SIDD benchmark server and the validation split are not directly comparable, and [22] mixes both sources (asterisked entries in its Table IV).
+- **SIDD [1].** We use the validation split (`ValidationNoisyBlocksSrgb.mat`) with the matching ground-truth blocks. Numbers from the SIDD benchmark server and the validation split are not directly comparable, and [22] mixes both sources (asterisked entries in its Table IV).
 - **DND [23].** Ground truth is withheld; results come from the benchmark's online server, so we can only report what the server returns after a submission.
 - **SSIM.** Variants differ: luminance-only SSIM vs. per-channel SSIM averaged over R, G, B. The authors' code averages per-channel SSIM, and so do we, so our SSIM values are comparable to [22] but not necessarily to papers that use luminance SSIM.
 
@@ -126,11 +126,11 @@ The package `haartsvd/` implements Algorithm 1 of [22]: (1) GCP matching of K si
 | Torch complex (CUDA / CPU) | Local bases or PCA group transform | Needs complex tensors, which MPS lacks, so on MPS these variants run on the NumPy path |
 | Block matching | All variants | Torch on CUDA, Numba on CPU and MPS (`matcher="auto"`), so "NumPy" timings use a Numba matcher |
 
-On MPS the output matches the NumPy reference in PSNR, and the filter stage takes 0.42 s against 2.97 s on kodim01 (preliminary, from our development notes; we did not rerun on MPS, and the measured CUDA and CPU timings are in Section 6.3). The CUDA path was checked on Colab (Tesla T4): `check_device.py` printed OK, and for the four variants it tests (global bases + Haar, local bases, PCA group transform, local bases + PCA) the PSNR difference between the CUDA and the NumPy result is at most 0.0002 dB, with both the Numba and the torch block matcher.
+On MPS the output matches the NumPy reference in PSNR, and the filter stage takes 0.42 s against 2.97 s on kodim01 (from our development notes; we did not rerun on MPS, and the measured CUDA and CPU timings are in Section 6.3). The CUDA path was checked on Colab (Tesla T4): `check_device.py` printed OK, and for the four variants it tests (global bases + Haar, local bases, PCA group transform, local bases + PCA) the PSNR difference between the CUDA and the NumPy result is at most 0.0002 dB, with both the Numba and the torch block matcher.
 
 ### 4.4 Hardware and seeds
 
-Hardware: Google Colab, NVIDIA Tesla T4 (15 GB, driver 580.82.07, CUDA 13.0) and an Intel Xeon CPU @ 2.00 GHz; torch 2.11.0+cu130, numba 0.61.2, numpy 2.1.3, scikit-image 0.25.2, bm3d 4.0.3. No MPS runs were made. Kodak noise seed: 1000·case + image index (0-based, over all 24 images), so every run reproduces the same noisy images. The ablations use the same rule but with the index *within the six-image subset*, so their noisy realisations differ from those of the main Kodak run; the "reused" bases are learned from noisy kodim01 with seed 7. Run `scripts/run_all.sh` to regenerate every table.
+Hardware for Sections 5–6: Google Colab, NVIDIA Tesla T4 (15 GB, driver 580.82.07, CUDA 13.0) and an Intel Xeon CPU @ 2.00 GHz; torch 2.11.0+cu130, numba 0.61.2, numpy 2.1.3, scikit-image 0.25.2, bm3d 4.0.3. No MPS runs were made. Kodak noise seed: 1000·case + image index (0-based, over all 24 images), so every run reproduces the same noisy images. The ablations use the same rule but with the index *within the six-image subset*, so their noisy realisations differ from those of the main Kodak run; the "reused" bases are learned from noisy kodim01 with seed 7. Run `scripts/run_all.sh` to regenerate every table.
 
 Evaluation details. Kodak noisy images are float arrays that are neither clipped nor rounded to 8 bits, so the noise is exactly Gaussian. Outputs are clipped to [0, 255] before PSNR (peak 255) and SSIM. SSIM is the scikit-image implementation with a Gaussian window (σ = 1.5, no sample covariance), averaged over the R, G, B channels. PolyU uses `*_real.JPG` as the noisy input and `*_mean.JPG` as the reference. The GPU filter accumulates in float32 with atomic additions, so results can differ in the last digits between runs and from the float64 NumPy path.
 
@@ -163,7 +163,7 @@ Kodak columns: all 24 images, from `kodak_summary.csv` (n = 24 per row; 144 rows
 
 ### 5.2 Paper Table I: locally learned, globally learned and reused bases
 
-*[22] reports this on CC15, HighISO and SIDD-val, which we do not run; we repeat the comparison on a six-image Kodak subset (kodim03, 05, 08, 15, 19, 23) for both noise cases from `results/ablation_transforms.csv` (group = haar; bases = local / global / reused), so only the trend is comparable. Our "reused" bases are learned from one noisy image (kodim01) at the same noise case, so the noise level matches, unlike a transfer across datasets.*
+*[22] reports this on CC15, HighISO and SIDD-val, where we did not repeat this comparison; we repeat the comparison on a six-image Kodak subset (kodim03, 05, 08, 15, 19, 23) for both noise cases from `results/ablation_transforms.csv` (group = haar; bases = local / global / reused), so only the trend is comparable. Our "reused" bases are learned from one noisy image (kodim01) at the same noise case, so the noise level matches, unlike a transfer across datasets.*
 
 Reported in [22]: CC15 37.86 / 37.89 / 37.90 dB (local / global / reused), HighISO 40.05 / 40.13 / 40.15, SIDD-val 34.35 / 34.39 / 34.38; time 6.95 s / 6.13 s / 6.02 s.
 
@@ -181,7 +181,7 @@ Sharing bases costs nothing in PSNR: in case 1 the three variants are within 0.0
 
 [22] states that Haar-tSVD matches PCA-tSVD in quality but is more sensitive to the noise level and tends to over-smooth when σ is mis-specified (the figure plots PSNR against σ from 15 to 55; the paper gives no table).
 
-This work: `results/ablation_sigma.csv` and `figures/sigma_sensitivity.png`. Design: the σ passed to the denoiser is a factor f ∈ {0.6, 0.8, 1.0, 1.2, 1.5, 2.0} times the nominal σ (20 for case 1, 50 for case 2), for the Haar and the PCA group transform, both with global bases, on the six-image subset. This differs from [22], whose PCA-tSVD baseline has its own (local) bases and whose x-axis is the absolute σ. We had expected the best factor to be below 1, because the nominal σ is above the RMS noise (Section 5.1). It is not: `TAU_SCALE` was tuned at f = 1 under the same convention, which already absorbs that offset. Drops are therefore measured from each curve's own maximum.
+This work: `results/ablation_sigma.csv` and `results/figures/sigma_sensitivity.png`. Design: the σ passed to the denoiser is a factor f ∈ {0.6, 0.8, 1.0, 1.2, 1.5, 2.0} times the nominal σ (20 for case 1, 50 for case 2), for the Haar and the PCA group transform, both with global bases, on the six-image subset. This differs from [22], whose PCA-tSVD baseline has its own (local) bases and whose x-axis is the absolute σ. We had expected the best factor to be below 1, because the nominal σ is above the RMS noise (Section 5.1). It is not: `TAU_SCALE` was tuned at f = 1 under the same convention, which already absorbs that offset. Drops are therefore measured from each curve's own maximum.
 
 | PSNR (drop from own peak) | f = 0.6 | 0.8 | 1.0 | 1.2 | 1.5 | 2.0 |
 |---|---|---|---|---|---|---|
@@ -200,7 +200,7 @@ In case 2 the Haar SSIM rises from 0.762 at f = 1.0 to 0.816 at f = 1.2. This su
 
 ---
 
-## 6. Preliminary Results of Our Own
+## 6. Results of Our Own
 
 ### 6.1 RQ1 and RQ2: Haar vs. PCA, and basis sharing
 
@@ -236,7 +236,7 @@ Source: `results/polyu_kappa_tuning.csv`, `polyu_per_image.csv`, `polyu_summary.
 
 *Comparison.* With this protocol Haar-tSVD reaches 38.76 dB / 0.967, within 0.02 dB of the 38.78 dB reported in [22], and is above Local-tSVD+PCA on 71 of the 81 images it changes. Local-tSVD+PCA is better on 10 images, including all four images that get σ ≥ 29.65 and four of the five Canon5D2 "toy" scenes, which suggests (untested) that the Haar variant smooths more when σ is set high.
 
-Four caveats for the table. (i) The same σ = κ · MAD is given to Local-tSVD+PCA, although κ was tuned for Haar-tSVD (with its own `TAU_SCALE`), so the baselines are not tuned. (ii) "Oracle σ" is the best of nine values {2, 3, 4, 5, 6, 8, 10, 12, 15}, chosen per image using the ground truth, so it is an upper bound that also absorbs per-image tuning, not the true noise level. Oracle-σ gap: oracle − estimated = 39.01 − 38.76 = 0.25 dB. (iii) The oracle grid stops at 15, but the estimated σ is 17.79 on most images, so this "oracle" does not search the region the tuned estimator uses, and 0.25 dB is a lower bound on the true gap. We therefore extended the oracle with σ ∈ {18, 20, 24, 28, 32} (`polyu_oracle_ext.csv`). The extended oracle reaches 39.18 dB / 0.9717, and the best σ is above 15 on 77 of the 90 images, so the gap to the estimated-σ result is 0.42 dB. Even this is a lower bound, because 16 images still pick the new largest value, σ = 32. More than half of the gap comes from the nine images where MAD = 0: we leave them unchanged (39.03 dB on average), while the oracle denoises them to 41.49 dB (+2.45 dB). These images are therefore noisy, and a zero MAD is a failure of the estimator, not a sign of clean input. Averaged over all 90 images they account for 0.25 dB of the 0.42 dB gap, while the other 81 images are 0.20 dB from their oracle. A lower bound on σ would remove most of this loss. We have not applied one, because we found the problem using the test-set oracle, so tuning on it would leak test information. We list it for the final phase, to be tuned on the validation images only. (iv) CBM3D on PolyU is run separately with its own κ tuned on the same 10 validation images (`polyu_extra.py`), so caveat (i) does not apply to it. Its validation grid {8, 12, 16, 24, 32} gives 36.06, 36.32, 36.43, 36.43, 36.35 dB, an interior peak, and the first maximum, κ = 16 (σ = 11.86 for most images), is used. On the test set CBM3D reaches 38.52 dB / 0.9668, i.e. 0.17 dB below the 38.69 dB reported in [22], and 0.24 dB below our Haar-tSVD (38.76 / 0.9670). On the 81 images that get σ > 0, Haar-tSVD has the higher PSNR on 73 and the higher SSIM on 47, so the PSNR advantage is consistent but the SSIM values are practically equal. CBM3D wins on the Canon5D2 "toy" scenes (by up to 0.34 dB), as Local-tSVD+PCA did. The nine images with MAD = 0 are returned unchanged by CBM3D as well (`bm3d` cannot run with σ = 0), so they do not favour either method. With this protocol the ordering on PolyU is Haar-tSVD > CBM3D > Local-tSVD+PCA (38.76 > 38.52 > 38.27 dB), whereas [22] reports MSt-SVD > Haar-tSVD > CBM3D (38.85 > 38.78 > 38.69 dB); the Haar-tSVD vs CBM3D order agrees. CBM3D time on PolyU (72 s per 512×512 image) was measured with two images processed in parallel, one thread each, so it is not comparable to the Kodak CBM3D times and is not reported in the tables.
+Four caveats for the table. (i) The same σ = κ · MAD is given to Local-tSVD+PCA, although κ was tuned for Haar-tSVD (with its own `TAU_SCALE`), so the baselines are not tuned. (ii) "Oracle σ" is the best of nine values {2, 3, 4, 5, 6, 8, 10, 12, 15}, chosen per image using the ground truth, so it is an upper bound that also absorbs per-image tuning, not the true noise level. Oracle-σ gap: oracle − estimated = 39.01 − 38.76 = 0.25 dB. (iii) The oracle grid stops at 15, but the estimated σ is 17.79 on most images, so this "oracle" does not search the region the tuned estimator uses, and 0.25 dB is a lower bound on the true gap. We therefore extended the oracle with σ ∈ {18, 20, 24, 28, 32} (`polyu_oracle_ext.csv`). The extended oracle reaches 39.18 dB / 0.9717, and the best σ is above 15 on 77 of the 90 images, so the gap to the estimated-σ result is 0.42 dB. Even this is a lower bound, because 16 images still pick the new largest value, σ = 32. More than half of the gap comes from the nine images where MAD = 0: we leave them unchanged (39.03 dB on average), while the oracle denoises them to 41.49 dB (+2.45 dB). These images are therefore noisy, and a zero MAD is a failure of the estimator, not a sign of clean input. Averaged over all 90 images they account for 0.25 dB of the 0.42 dB gap, while the other 81 images are 0.20 dB from their oracle. A lower bound on σ would remove most of this loss. We did not apply one here, because we found the problem using the test-set oracle, so tuning on it would leak test information. Section 7.2 tunes it on the validation images only. (iv) CBM3D on PolyU is run separately with its own κ tuned on the same 10 validation images (`polyu_extra.py`), so caveat (i) does not apply to it. Its validation grid {8, 12, 16, 24, 32} gives 36.06, 36.32, 36.43, 36.43, 36.35 dB, an interior peak, and the first maximum, κ = 16 (σ = 11.86 for most images), is used. On the test set CBM3D reaches 38.52 dB / 0.9668, i.e. 0.17 dB below the 38.69 dB reported in [22], and 0.24 dB below our Haar-tSVD (38.76 / 0.9670). On the 81 images that get σ > 0, Haar-tSVD has the higher PSNR on 73 and the higher SSIM on 47, so the PSNR advantage is consistent but the SSIM values are practically equal. CBM3D wins on the Canon5D2 "toy" scenes (by up to 0.34 dB), as Local-tSVD+PCA did. The nine images with MAD = 0 are returned unchanged by CBM3D as well (`bm3d` cannot run with σ = 0), so they do not favour either method. With this protocol the ordering on PolyU is Haar-tSVD > CBM3D > Local-tSVD+PCA (38.76 > 38.52 > 38.27 dB), whereas [22] reports MSt-SVD > Haar-tSVD > CBM3D (38.85 > 38.78 > 38.69 dB); the Haar-tSVD vs CBM3D order agrees. CBM3D time on PolyU (72 s per 512×512 image) was measured with two images processed in parallel, one thread each, so it is not comparable to the Kodak CBM3D times and is not reported in the tables.
 
 ### 6.3 RQ3: speed
 
@@ -275,42 +275,121 @@ Source: `results/ablation_params.csv`. Case 1 only, six-image subset, σ = 20. G
 
 ### 6.5 Visual results
 
-**Figure 1** (`figures/sigma_sensitivity.png`). PSNR against the ratio of given to nominal σ, for the Haar and the PCA group transform with global bases, averaged over the six-image Kodak subset. Left: case 1. Right: case 2. The plotted values are those of Section 5.3: Haar peaks at 1.0 and 1.2 times the nominal σ, PCA at 1.2 and 1.5, and Haar falls faster when σ is overestimated.
+![](results/figures/sigma_sensitivity.png){width=85%}
 
-**Figure 2** (`figures/kodak_case1_kodim23.png`). Crop of kodim23, Kodak case 1 (σ = 20). From left: clean, noisy (24.45 dB), CBM3D (36.84 dB), Local-tSVD+PCA (35.61 dB), Haar-tSVD (36.59 dB). At this noise level the three outputs look very similar at this scale.
+**Figure 1.** PSNR against the ratio of given to nominal σ, for the Haar and the PCA group transform with global bases, averaged over the six-image Kodak subset. Left: case 1. Right: case 2. The plotted values are those of Section 5.3: Haar peaks at 1.0 and 1.2 times the nominal σ, PCA at 1.2 and 1.5, and Haar falls faster when σ is overestimated.
 
-**Figure 3** (`figures/kodak_case2_kodim23.png`). The same crop for case 2 (σ = 50). From left: clean, noisy (16.59 dB), CBM3D (32.48 dB), Local-tSVD+PCA (28.95 dB), Haar-tSVD (31.02 dB). Haar-tSVD keeps the feather texture, but leaves low-frequency colour mottling in the flat green background, where CBM3D is smooth. This is the visual counterpart of its lower case-2 SSIM and of the residual noise discussed in Sections 5.1 and 5.3. Local-tSVD+PCA shows stronger streak-like artefacts in the background. kodim23 was fixed as the example image in the code before the run, but it happens to be the image where CBM3D leads Haar-tSVD by the most in case 2 (1.47 dB), so this figure shows the worst case for Haar-tSVD, not a typical one.
+![](results/figures/kodak_case1_kodim23.png)
 
-**Figure 4** (`figures/polyu_example.png`). Crop of the first PolyU test image (Canon5D2 "circuit_8"). From left: clean (mean image), real noisy (33.41 dB), Local-tSVD+PCA (34.84 dB), Haar-tSVD (35.25 dB), both with σ = 24 · MAD. Haar-tSVD removes the grain in the brown background more completely. CBM3D is not shown, because it was run separately (`polyu_extra.py`), which does not save images.
+**Figure 2.** Crop of kodim23, Kodak case 1 (σ = 20). From left: clean, noisy (24.45 dB), CBM3D (36.84 dB), Local-tSVD+PCA (35.61 dB), Haar-tSVD (36.59 dB). At this noise level the three outputs look very similar at this scale.
+
+![](results/figures/kodak_case2_kodim23.png)
+
+**Figure 3.** The same crop for case 2 (σ = 50). From left: clean, noisy (16.59 dB), CBM3D (32.48 dB), Local-tSVD+PCA (28.95 dB), Haar-tSVD (31.02 dB). Haar-tSVD keeps the feather texture, but leaves low-frequency colour mottling in the flat green background, where CBM3D is smooth. This is the visual counterpart of its lower case-2 SSIM and of the residual noise discussed in Sections 5.1 and 5.3. Local-tSVD+PCA shows stronger streak-like artefacts in the background. kodim23 was fixed as the example image in the code before the run, but it happens to be the image where CBM3D leads Haar-tSVD by the most in case 2 (1.47 dB), so this figure shows the worst case for Haar-tSVD, not a typical one.
+
+![](results/figures/polyu_example.png)
+
+**Figure 4.** Crop of the first PolyU test image (Canon5D2 "circuit_8"). From left: clean (mean image), real noisy (33.06 dB), CBM3D (34.83 dB), Local-tSVD+PCA (34.49 dB), Haar-tSVD (34.92 dB), all with σ = 24 · MAD. Local-tSVD+PCA leaves more grain in the brown background, while CBM3D and Haar-tSVD look similar. This figure comes from the RTX 3090 run, so its PSNR values use the decoder described in Section 7.1 and are lower than the Colab values for this image.
 
 The PSNR values in the figure titles are computed from the saved 8-bit PNG outputs, so they can differ by up to 0.03 dB from the per-image CSV values, which are computed in floating point.
 
 ---
 
-## 7. Discussion and Open Issues
+## 7. Noise Estimation and SIDD Validation
 
-1. **Gap to the paper's numbers.** On Kodak, Haar-tSVD is 0.14 dB (case 1) and 0.40 dB (case 2) below the values reported in [22], and the reported advantage over CBM3D is reproduced in case 1 but not in case 2 (Section 5.1); On PolyU, Haar-tSVD is 0.02 dB below the reported value. That close match relies on a κ tuned on ten validation images and on an estimator that gives nearly the same σ for most images (Section 6.2), so it should not be read as reproducing the paper's blind pipeline. Likely causes: (a) the τ normalisation (Section 4.2), tuned on two images only; (b) SSIM details (we average per-channel SSIM, as the authors' code does); (c) a different noise realisation than the authors', and whether they clip and quantise the noisy image to 8 bits (we do not); (d) search window and step differences.
-2. **High noise (Kodak case 2).** [22] observes that thresholding fails when noise coefficients are as large as signal coefficients and that matching degrades. Our gap to [22] is larger in case 2 (0.40 dB) than in case 1 (0.14 dB). The σ sweep (Section 5.3) suggests a concrete cause: on the subset, Haar-tSVD in case 2 is best at f = 1.2, which gains 0.45 dB and 0.054 SSIM over f = 1. So the single `TAU_SCALE`, tuned on two images across both cases, is too low for case 2. This calibration effect would also explain much of the case-2 SSIM gap to CBM3D. We have not rerun the full case-2 Kodak set with a case-specific scale, and choosing it on Kodak would make it a tuned, not a blind, setting.
-3. **Real-noise σ estimation.** On PolyU the per-image oracle is 0.42 dB above our κ · MAD result (39.18 against 38.76 dB), and this is a lower bound. More than half of the gap comes from nine images where MAD = 0 (Section 6.2). The finest-scale MAD is quantised on 8-bit images and nearly constant across the set. Sections 3.1–3.2 give the likely reasons (correlated noise) and the next step (Chen et al. [39]).
+### 7.1 Setup and a decoder caveat
 
-4. **Protocol caveats.** `TAU_SCALE` was tuned on two images for the global-Haar variant and is shared by all t-SVD variants, which favours Haar over PCA at f = 1 (Section 6.1); the ablations use six Kodak images; κ was tuned for Haar-tSVD only; the Kodak σ is the largest channel std, not the RMS. State these when interpreting differences smaller than a few tenths of a dB.
+These runs used an NVIDIA RTX 3090 (24 GB) and an Intel i7-9700K (8 cores). All parameters were tuned on the same ten PolyU validation images as Section 6.2; nothing was tuned on SIDD.
 
-**Not done:** DND submission, SIDD validation, A-Haar-tSVD and RA-Haar-tSVD (they need the CNN and the FCN).
+**PolyU numbers in this section are not comparable with Sections 5–6.** The RTX 3090 machine decoded the PolyU JPEGs with libjpeg 9.0, while Colab used libjpeg-turbo. The files are identical (same checksum), but the decoded pixels are not: the noisy input is 35.86 dB here against 36.04 dB in Section 6.2, the difference is 0.02–0.80 dB per image, and MAD = 0 on 14 test images instead of 9. As a result, Haar-tSVD at σ = 24 · MAD gives 38.47 dB here against 38.76 dB in Section 6.2. We did not rerun with libjpeg-turbo for lack of time, so differences *within* the PolyU table of Section 7.2 are meaningful but its absolute values should not be set against Section 5.1 or [22]. This also shows that a JPEG decoder alone can move a PolyU result by about 0.3 dB, which is larger than many of the method differences discussed in this report. Kodak and SIDD are decoded from PNG and are not affected.
+
+### 7.2 Noise estimators
+
+*Known Gaussian noise (Kodak, 24 images).* The PCA estimator of Chen et al. [39] and MAD are equally accurate:
+
+| Case | Estimator | True R / G / B | Estimated R / G / B | Mean rel. error |
+|---|---|---|---|---|
+| 1 | MAD | 15 / 10 / 20 | 16.02 / 11.22 / 20.82 | 7.7 % |
+| 1 | PCA | 15 / 10 / 20 | 15.98 / 11.32 / 20.74 | 7.8 % |
+| 2 | MAD | 40 / 30 / 50 | 40.50 / 30.65 / 50.46 | 1.5 % |
+| 2 | PCA | 40 / 30 / 50 | 40.39 / 30.54 / 50.41 | 1.2 % |
+
+*Real noise (PolyU, 90 test images).* Each rule is tuned on the validation images. The floor rule is σ = max(κ · MAD, floor). CBM3D uses the rule that is best on validation, with κ and floor both scaled by a factor tuned on validation for CBM3D (0.8, an interior point of the grid).
+
+| Method | σ rule | κ | Floor | Val. PSNR | Test PSNR | Test SSIM |
+|---|---|---|---|---|---|---|
+| Haar-tSVD | MAD | 24 | – | 36.39 | 38.47 | 0.9636 |
+| Haar-tSVD | PCA | 20 | – | 37.03 | 38.72 | 0.9668 |
+| Haar-tSVD | MAD + floor | 24 | 16 | 37.08 | 38.84 | 0.9682 |
+| CBM3D | MAD + floor | 19.2 | 12.8 | – | 38.64 | 0.9680 |
+
+- **The floor fixes the MAD = 0 failure, and little else.** It adds 0.37 dB on average. On the 14 images with MAD = 0, PSNR rises from 38.15 to 40.50 dB; on the other 76 it moves from 38.53 to 38.54 dB. The extended oracle of Section 6.2, rerun with this decoder, is 38.99 dB, so the gap to the oracle falls from 0.52 to 0.15 dB.
+- **PCA does not beat the simple rule.** PCA needs no floor (40.33 dB on the MAD = 0 images), but it is 0.10 dB lower on the other 76 images, ending 0.12 dB below MAD + floor overall. It wins on 27 of the 90 images. The validation curves are flat near their peaks (κ = 16 and 20 tie for PCA; floors 12, 16 and 20 are within 0.01 dB), so the exact values matter little.
+- **Haar-tSVD against CBM3D.** Under the same rule Haar-tSVD is 0.20 dB higher, with higher PSNR on 79 of 90 images, while SSIM is level (higher on 45 of 90).
+- **Possible bias.** The idea of a floor came from inspecting test-set results in Section 6.2. Its value was tuned on validation only, but the choice to try it was not blind.
+
+### 7.3 SIDD validation
+
+We use the 1280 sRGB validation blocks (40 images × 32 blocks of 256 × 256), with the σ rules tuned on PolyU. The official server was unavailable, so the blocks come from a Hugging Face mirror; our noisy input measures 23.66 dB. A quick validation run on a machine with libjpeg-turbo selected the same rules and parameters, so the decoder issue should not affect this table.
+
+| Method | PSNR | SSIM | PSNR reported in [22] | SSIM reported in [22] |
+|---|---|---|---|---|
+| Noisy input | 23.66 | – | – | – |
+| Haar-tSVD (σ = max(24 · MAD, 16)) | 33.56 | 0.8822 | 35.05 | 0.914 |
+| CBM3D (σ = max(19.2 · MAD, 12.8)) | 33.31 | 0.8673 | 34.74 | 0.922 |
+
+Reported values are from Table IV of [22], which mixes benchmark-server and validation sources (Section 3.5), so they are not strictly the same protocol. Table I of [22] gives 34.38 / 0.876 for reused bases on SIDD validation.
+
+- **Replication.** Haar-tSVD and CBM3D are 1.49 and 1.43 dB below the values reported in [22], so the gap is about the same for both, which suggests a shared cause such as the σ rule or the protocol rather than the denoiser (untested). The PSNR order agrees (+0.25 dB here, +0.31 dB in [22]; higher on 771 of 1280 blocks), but the SSIM order does not: Haar-tSVD is higher here and lower in [22].
+- **The PolyU κ transfers poorly.** The median MAD is 7.9 on SIDD against 0.74 on most PolyU images, so σ = 24 · MAD runs from 71 to 670 (median 190), far above the overall noise level (the noisy input's 23.66 dB corresponds to an RMS error of about 17). A fixed κ cannot be a calibrated noise level across datasets; here it behaves as a strong smoothing setting. The rule is blind and tuned elsewhere, as intended, and that is likely part of the 1.5 dB gap (untested).
+- **No oracle bound.** We ran an oracle σ on {2, …, 40}, but 1184 of 1280 blocks chose the largest value, and the result (33.38 dB, 0.7544) is below the estimate. The grid does not reach the useful range, so this is not an upper bound and we do not report it as one. The row remains in `results/sidd_summary.csv`.
+
+### 7.4 Speed
+
+On the RTX 3090 Haar-tSVD takes 0.51 s on a 512×512×3 image (filter stage 0.03 s) and 0.12 s on a 256×256 SIDD block, against 11.72 s for the NumPy CPU path and 14.65 s for CBM3D on the i7-9700K. The CBM3D times in the PolyU and SIDD runs (92.6 s and 34.4 s per image) were measured with eight parallel workers and are not comparable.
 
 ---
 
-## 8. Plan for the Final Phase
+## 8. Discussion
 
-1. SIDD validation (`ValidationNoisyBlocksSrgb.mat`) and a DND submission.
-2. PCA-based noise estimator (Chen et al. [39]) to close the oracle-σ gap.
-3. Eigenvalue-rank adaptive σ (Eq. (23) of [22]) without the CNN.
-4. Optional: FCN refinement of the mean patch (RA-Haar-tSVD).
+1. **Gap to the paper's numbers.** On Kodak, Haar-tSVD is 0.14 dB (case 1) and 0.40 dB (case 2) below the values reported in [22], and the reported advantage over CBM3D is reproduced in case 1 but not in case 2 (Section 5.1); On PolyU, Haar-tSVD is 0.02 dB below the reported value. That close match relies on a κ tuned on ten validation images and on an estimator that gives nearly the same σ for most images (Section 6.2), so it should not be read as reproducing the paper's blind pipeline. Likely causes: (a) the τ normalisation (Section 4.2), tuned on two images only; (b) SSIM details (we average per-channel SSIM, as the authors' code does); (c) a different noise realisation than the authors', and whether they clip and quantise the noisy image to 8 bits (we do not); (d) search window and step differences.
+2. **High noise (Kodak case 2).** [22] observes that thresholding fails when noise coefficients are as large as signal coefficients and that matching degrades. Our gap to [22] is larger in case 2 (0.40 dB) than in case 1 (0.14 dB). The σ sweep (Section 5.3) suggests a concrete cause: on the subset, Haar-tSVD in case 2 is best at f = 1.2, which gains 0.45 dB and 0.054 SSIM over f = 1. So the single `TAU_SCALE`, tuned on two images across both cases, is too low for case 2. This calibration effect would also explain much of the case-2 SSIM gap to CBM3D. We have not rerun the full case-2 Kodak set with a case-specific scale, and choosing it on Kodak would make it a tuned, not a blind, setting.
+3. **Real-noise σ estimation.** On PolyU the per-image oracle is 0.42 dB above our κ · MAD result (39.18 against 38.76 dB), and this is a lower bound. More than half of the gap comes from nine images where MAD = 0 (Section 6.2). The finest-scale MAD is quantised on 8-bit images and nearly constant across the set. Sections 3.1–3.2 give the likely reasons (correlated noise). A σ floor closes most of this gap, but neither the floor nor the PCA estimator [39] gives a σ that holds across datasets (Sections 7.2–7.3).
+
+4. **Protocol caveats.** `TAU_SCALE` was tuned on two images for the global-Haar variant and is shared by all t-SVD variants, which favours Haar over PCA at f = 1 (Section 6.1); the ablations use six Kodak images; κ was tuned for Haar-tSVD only; the Kodak σ is the largest channel std, not the RMS. State these when interpreting differences smaller than a few tenths of a dB.
+
+5. **Reproducibility across machines.** The same JPEG files, decoded by two libjpeg versions, gave PolyU results about 0.3 dB apart (Section 7.1). Papers rarely state the decoder, so PolyU differences of this size between papers should be read with care. Our PolyU results in Sections 5–6 and Section 7.2 are not on the same decoder, and the SIDD oracle grid was too small (Section 7.3); we state both rather than rerun them.
+
+---
+
+## 9. Conclusion
+
+We implemented Haar-tSVD [22] with NumPy, MPS and CUDA backends and evaluated it on Kodak, PolyU and SIDD, without its CNN noise estimator.
+
+- **RQ1: yes.** A fixed Haar transform replaces per-group PCA without a noticeable loss. At our shared threshold Haar is 0.3–0.9 dB ahead with global bases; with each transform at its own best σ, PCA is 0.17 dB ahead on the Kodak subset, so the advantage is mostly calibration.
+- **RQ2: yes.** One set of t-SVD bases, shared or reused, is as good as locally learned bases (within 0.02 dB in case 1, +0.33 dB in case 2).
+- **RQ3.** The filter stage is 3.6× faster than with local bases on the T4, and the whole denoiser takes 0.89 s against 36.6 s for CPU CBM3D. Block matching and learning the bases now dominate the runtime.
+- **Replication.** On Kodak we are 0.14 / 0.40 dB below [22] and reproduce the advantage over CBM3D only at moderate noise. On PolyU we match the reported value within 0.02 dB, with κ tuned on validation. On SIDD we are about 1.5 dB below it, and ahead of CBM3D in both PSNR and SSIM.
+- **Noise estimation.** On known Gaussian noise MAD and the PCA estimator are equally accurate. On real noise neither gives a usable σ directly: the scale κ tuned on PolyU overshoots on SIDD, and most of the gain from a σ floor comes from images where MAD fails.
+
+---
+
+## 10. Future Work
+
+1. **A σ rule that holds across datasets.** κ tuned on PolyU gives σ of 71–670 on SIDD. Candidates are the eigenvalue-rank adaptive σ of Eq. (23) of [22] without the CNN, the CNN estimator itself (A-Haar-tSVD), or a variance-stabilising transform in the spirit of Noise2VST [44].
+2. **Consistent PolyU decoding.** Rerun Section 7.2 with libjpeg-turbo, so it can be compared directly with Sections 5–6.
+3. **A valid SIDD oracle.** Rerun with a σ grid that reaches the estimated range, to measure how much of the 1.5 dB gap is due to σ.
+4. **High-noise calibration.** Case 2 peaks at f = 1.2 (Section 5.3), which suggests a noise-dependent threshold scale, reported as tuned rather than blind.
+5. **A fairer PCA baseline.** Tune σ and the threshold scale for Local-tSVD+PCA, which is 0.42–1.68 dB below the MSt-SVD values reported in [22].
+6. **More datasets.** DND (needs a server submission), CC15, HighISO and IOCI, plus the basis comparison of Section 5.2 on real noise.
+7. **RA-Haar-tSVD.** Add the FCN refinement of the mean patch, which we left out of scope.
+8. **Speed.** Move the learning of the global bases to the GPU, since Section 6.3 suggests it currently is not accelerated.
 
 ---
 
 ## References
 
-References [1]–[36] are those of the preliminary report and keep their numbers; the ones cited here are repeated below. New references start at [37].
+Reference numbers follow our earlier project report, so only the works cited here are listed and the numbering has gaps.
 
 [1] Abdelrahman Abdelhamed, Stephen Lin, and Michael S. Brown. A high-quality denoising dataset for smartphone cameras. In *CVPR*, pages 1692–1700, 2018.
 

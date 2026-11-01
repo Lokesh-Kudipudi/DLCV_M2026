@@ -1,4 +1,4 @@
-"""Noise-level estimators for the final phase (report Sec. 3.1 and 8).
+"""Noise-level estimators (report Sec. 3.1 and 7).
 
 --part kodak   Accuracy of the MAD and the PCA estimator of Chen et al. [39] against the known
                per-channel noise std on Kodak (case 1 and 2). CPU only, about a minute.

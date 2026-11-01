@@ -1,4 +1,4 @@
-"""SIDD sRGB validation (40 images x 32 blocks of 256x256 = 1280 blocks), report Sec. 8.
+"""SIDD sRGB validation (40 images x 32 blocks of 256x256 = 1280 blocks), report Sec. 7.
 
 No parameter is tuned on SIDD: the sigma rule (estimator, kappa, floor) and CBM3D's kappa are read
 from results/polyu_est_summary.csv (tuned on the 10 PolyU validation images by noise_est.py), or

@@ -61,7 +61,7 @@ Sanity checks on the numbers:
 - [x] Arithmetic of every derived number (gaps, ratios, drops) re-checked; two wording fixes
 - [ ] Optional: cross-check tables against `results/report_tables.md` (needs Colab CSVs, step 2.7)
 - [x] PDF exported: `pandoc report.md -o report.pdf --pdf-engine=typst -V papersize=a4 -V margin.x=2cm -V margin.y=2cm -V fontsize=10pt`
-- [ ] Optional: embed figures once `figures/*.png` are copied from Colab (currently referenced by filename only)
+- [x] Figures embedded (report 6.5)
 
 Report checklist:
 - [x] Every number comes from the Colab CSVs (not copied to this repo; copy them to make it checkable locally)
@@ -91,8 +91,10 @@ git add results && git commit -m "Final-phase results" && git push
 ```
 Expected time on a T4-class GPU + 16–32 cores: noise_est polyu ~15 min (+ CBM3D ~15 min),
 SIDD Haar-tSVD ~10 min, SIDD CBM3D ~10–20 min; FULL=1 adds ~2–3 h (CBM3D on Kodak/PolyU is serial).
-- [ ] Run on the VPS and push `results/`
-- [ ] Pull here; write report sections from `results/report_tables.md` (F.1–F.3)
+- [x] Run on the VPS and push `results/`
+- [x] Report Section 7 written from `results/report_tables.md` (F.1–F.3)
+- [ ] Not rerun for lack of time (report 7.1, 7.3, 10): PolyU used libjpeg 9.0 on the VPS, so F.2 is not comparable
+      with Sections 5–6; SIDD oracle grid stops at sigma 40. Fix is on branch `rerun-polyu-oracle`
 
 ### Still not implemented
 - [ ] DND submission (needs registration on the DND site; server-side evaluation)
