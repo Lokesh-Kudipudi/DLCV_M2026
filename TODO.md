@@ -15,94 +15,88 @@ that must pass before moving on. `[x]` = done already, `[ ]` = to do.
 - [x] Verified on MPS: same PSNR as NumPy, filter stage 2.97 s → 0.42 s (kodim01)
 
 ## Phase 1 — Environment
-- [ ] **Mac (MPS):** `uv sync`
-- [ ] **CUDA machine / Colab:**
-      `pip install torch --index-url https://download.pytorch.org/whl/cu124 && pip install -r requirements.txt`
-- [ ] Data (only if `data/` is missing): `bash scripts/setup_data.sh` → expect 24 and 200 files
-- [ ] Backend check: `HAARTSVD_DEVICE=cuda python scripts/check_device.py` (or `mps`)
-      → must print `OK`. The CUDA path has **not been tested yet**; fix any mismatch before Phase 2.
+- [x] **CUDA machine / Colab (Tesla T4):** torch 2.11.0+cu130, `pip install -r requirements.txt`
+- [x] Backend check: `HAARTSVD_DEVICE=cuda python scripts/check_device.py` → `OK`
+      (CUDA vs NumPy ≤ 0.0002 dB on all four variants, both matchers)
+- [ ] Optional: **Mac (MPS)** `uv sync` and rerun timing (report 4.3 MPS number is from dev notes only)
 
 ## Phase 2 — Experiments
 One command runs everything (`PYTHON=python` on a non-uv machine):
 ```bash
 scripts/run_all.sh cuda          # or: mps / cpu / auto;  FAST=1 skips Local-tSVD+PCA on full sets
 ```
-Or step by step (`HAARTSVD_DEVICE` picks the device):
 
-| # | Command | Outputs (in `results/`) | Check |
+| # | Command | Outputs (in `results/`) | Status |
 |---|---|---|---|
-| 2.1 | `python experiments/kodak.py` | `kodak_per_image.csv`, `kodak_summary.csv`, `images/kodak*_kodim23_*` | 144 rows (24 imgs × 2 cases × 3 methods) |
-| 2.2 | `python experiments/polyu.py` | `polyu_kappa_tuning.csv`, `polyu_per_image.csv`, `polyu_summary.csv` | chosen κ printed; 90 test images |
-| 2.3 | `python experiments/ablations.py` | `ablation_transforms.csv`, `ablation_params.csv`, `ablation_sigma.csv`, `timing.csv`, `ablations.md` | no NaN PSNR; timing table has device row |
-| 2.4 | `python experiments/figures.py` | `figures/kodak_case{1,2}_kodim23.png`, `figures/polyu_example.png`, `figures/sigma_sensitivity.png` | open each figure, check crops and labels |
+| 2.1 | `python experiments/kodak.py` | `kodak_per_image.csv`, `kodak_summary.csv`, `images/kodak*_kodim23_*` | [x] 144 rows |
+| 2.2 | `python experiments/polyu.py` | `polyu_kappa_tuning.csv`, `polyu_per_image.csv`, `polyu_summary.csv` | [x] κ = 24 (grid widened twice) |
+| 2.3 | `python experiments/ablations.py` | `ablation_transforms.csv`, `ablation_params.csv`, `ablation_sigma.csv`, `timing.csv`, `ablations.md` | [x] CUDA timing row |
+| 2.4 | `python experiments/figures.py` | `figures/kodak_case{1,2}_kodim23.png`, `figures/polyu_example.png`, `figures/sigma_sensitivity.png` | [x] |
+| 2.5 | `python experiments/polyu_extra.py --part cbm3d` | `polyu_cbm3d_{val,kappa_tuning,per_image,summary}.csv` | [x] κ_CBM3D = 16, 38.52 dB |
+| 2.6 | `python experiments/polyu_extra.py --part oracle` | `polyu_oracle_ext.csv` | [x] 39.18 dB, gap 0.42 dB |
+| 2.7 | `python scripts/fill_report_tables.py` | `report_tables.md` | [ ] run once CSVs are local |
 
 Sanity checks on the numbers:
-- [ ] Kodak case 1 Haar-tSVD is roughly 33–34.5 dB (paper 34.13); it should beat CBM3D, as in the paper.
-- [ ] If κ is chosen at the edge of the grid (1.0 or 4.0), widen `KAPPAS` in `polyu.py` and rerun 2.2.
-- [ ] Note the oracle-σ gap (oracle − estimated σ) on PolyU; it goes into the discussion.
-- [ ] Optional: on CUDA, rerun 2.3 so `timing.csv` has a CUDA row next to the MPS/CPU rows.
+- [x] Kodak case 1 Haar-tSVD 33.99 dB (paper 34.13), beats CBM3D (33.69). Case 2 does **not** (28.76 vs 29.07).
+- [x] κ grid widened: {1..4} → {2..12} → {8..24}; κ = 24 at the edge but flat (+0.01 dB from 20).
+      `KAPPAS` in `polyu.py` updated to the final grid.
+- [x] Oracle-σ gap noted: 0.25 dB (grid ≤ 15), 0.42 dB with extended grid (lower bound; 16 images pick σ = 32).
+- [x] CUDA row in `timing.csv`.
+- [ ] Optional: copy the Colab `results/*.csv`, `results/images/`, `figures/*.png` into this repo
+      (only `kodak.log` / `polyu.log` are here; needed for step 2.7 and Phase 5 comparisons)
 
-## Phase 3 — Further literature review (for the report)
-Summarise each item in 2–4 sentences: what it does, how it relates to Haar-tSVD, and what we take from it.
-- [ ] **Noise-level estimation** (replaces the paper's CNN): Donoho & Johnstone 1994 (MAD, what we use);
-      Liu, Tanaka & Okutomi 2013 (weak-texture patches, PCA); Chen, Zhu & Heng ICCV 2015 (PCA eigenvalue
-      statistics). Explain why MAD underestimates correlated real sRGB noise, which motivates κ.
-- [ ] **Real-noise modelling:** Foi et al. 2008 (Poisson–Gaussian); Mäkitalo & Foi 2013 (generalised
-      Anscombe VST); camera-pipeline effects (demosaicking, JPEG) that make sRGB noise spatially and
-      channel-correlated, which matters for the AWGN assumption behind Eq. (12).
-- [ ] **GCP / predecessors in detail:** Kong et al., GCP-ID (TIP 2025) and MSt-SVD (TIP 2019): what changes
-      in Haar-tSVD (no local bases, fixed Haar).
-- [ ] **Zero-shot / self-supervised denoisers** used as baselines in Table IV of the paper: Noise2VST,
-      ZS-N2N (Mansour & Heckel CVPR 2023), Pixel2Pixel, Blind2Unblind. Position them as "no paired data,
-      but per-image optimisation", against our "no optimisation at all".
-- [ ] **Evaluation protocols:** SIDD/DND benchmark protocols; per-channel SSIM vs. luminance SSIM
-      (the authors' code averages per-channel SSIM, and so do we).
-- [ ] Add a comparison table (method, needs training?, iterative?, group transform, noise estimate).
+## Phase 3 — Further literature review
+- [x] Noise-level estimation (MAD, Liu et al., Pyatykh et al., Chen et al.) — report 3.1
+- [x] Real-noise modelling (Foi, Mäkitalo & Foi, Nam et al.) — report 3.2
+- [x] GCP-ID / MSt-SVD in detail — report 3.3
+- [x] Zero-shot / self-supervised baselines — report 3.4
+- [x] Noise2VST [44] (ICCV 2025) and Pixel2Pixel [45] (TPAMI 47(6)) verified; ZS-N2N noted as not in Table IV
+- [x] Evaluation protocols — report 3.5
+- [x] Comparison table — report 3.6
 
-## Phase 4 — Write the progress report (`report.md`)
-Match the style and length of `group11-ppr.md` (same author block, numbered sections, numbered
-references), then export to PDF (e.g. `pandoc report.md -o report.pdf`).
-
-Outline and where each part's content comes from:
-1. **Abstract.** Problem, what was implemented, headline numbers from `kodak_summary.csv` / `polyu_summary.csv`.
-2. **Introduction / progress since the preliminary report.** Short; point to the ppr for the problem statement.
-3. **Further literature review.** From Phase 3.
-4. **Implementation.**
-   - Pipeline as built: GCP matching, global bases, Haar, threshold, aggregation.
-   - Design choices and deviations from the paper:
-     - orthonormal channel FFT, so τ needs a scale (`TAU_SCALE = 0.45`, tuned on 2 images);
-     - search radius 20 and step 4, taken from the authors' code (the paper says W < 20);
-     - MAD × κ in place of the CNN estimator.
-   - Backends: NumPy reference, MPS real-form path (orthogonal 192×192 matrix), CUDA complex path, GPU matcher.
-5. **Results replicated from the literature.** Each subsection puts the paper's numbers next to ours:
-   - 5.1 Paper Table IV (Kodak case 1/2, PolyU: CBM3D, MSt-SVD, Haar-tSVD) vs ours: `kodak_summary.csv`,
-     `polyu_summary.csv`. Use Local-tSVD+PCA as the stand-in for MSt-SVD and say so.
-   - 5.2 Paper Table I (locally-learned / globally-learned / reused bases) vs ours:
-     `ablation_transforms.csv` (group = haar, bases = local / global / reused).
-   - 5.3 Paper Fig. 6 (Haar vs PCA σ-sensitivity): `ablation_sigma.csv`, `figures/sigma_sensitivity.png`.
-     Does Haar degrade faster than PCA when σ is wrong?
-6. **Preliminary results of our own.**
-   - RQ1 (Haar vs PCA quality): `ablation_transforms.csv`.
-   - RQ2 (bases sharing / reuse): same file.
-   - RQ3 (speed): `timing.csv`. Give stage-wise times, MPS vs CPU (vs CUDA), and vs CBM3D.
-   - Parameter sensitivity: `ablation_params.csv` (ps, K, search radius, matching rule, aggregation weights).
-   - PolyU: κ tuning curve, estimated-σ vs oracle-σ gap.
-   - Visual results: `figures/*.png`.
-7. **Discussion and open issues.**
-   - Gap to the paper's numbers and likely causes (τ normalisation, SSIM details, noise realisation).
-   - Behaviour at high noise (case 2).
-   - Real-noise σ estimation.
-8. **Plan for the final phase.** From Phase 5 below.
-9. **References.** Keep the ppr numbering and add the new ones.
+## Phase 4 — Progress report (`report.md`)
+- [x] Draft written, sections 1, 3–8 + references
+- [x] Section 2 added (problem + RQ1–RQ3 recap)
+- [x] Draft/verify notes removed; cited ppr references [1]–[33] repeated in the reference list
+- [x] Arithmetic of every derived number (gaps, ratios, drops) re-checked; two wording fixes
+- [ ] Optional: cross-check tables against `results/report_tables.md` (needs Colab CSVs, step 2.7)
+- [x] PDF exported: `pandoc report.md -o report.pdf --pdf-engine=typst -V papersize=a4 -V margin.x=2cm -V margin.y=2cm -V fontsize=10pt`
+- [ ] Optional: embed figures once `figures/*.png` are copied from Colab (currently referenced by filename only)
 
 Report checklist:
-- [ ] Every number in the report is traceable to a CSV in `results/` (no hand-typed results).
-- [ ] Paper numbers are labelled "reported in [22]", ours "this work".
-- [ ] State the hardware (CPU model, GPU / MPS) and the seeds (Kodak noise seed = 1000·case + index).
-- [ ] State what was **not** done: DND, SIDD, A-/RA-Haar-tSVD.
+- [x] Every number comes from the Colab CSVs (not copied to this repo; copy them to make it checkable locally)
+- [x] Paper numbers labelled "reported in [22]", ours "this work"
+- [x] Hardware and seeds stated (report 4.4)
+- [x] What was **not** done stated: DND, SIDD, A-/RA-Haar-tSVD (report 7)
 
-## Phase 5 — After the progress report (final phase)
-- [ ] SIDD validation (`ValidationNoisyBlocksSrgb.mat`) and a DND submission
-- [ ] PCA-based noise estimator (Chen et al. 2015) to close the oracle-σ gap
-- [ ] Eigenvalue-rank adaptive σ (paper Eq. 23) without the CNN
+## Phase 5 — Final phase
+
+### Code (done here, smoke-tested on the M4)
+- [x] PCA noise estimator of Chen et al. [39]: `estimate_sigma_pca` in `haartsvd/utils.py`
+      (Kodak check: within ~1 of the true per-channel sigma in both cases, same as MAD; 0.07 s/image)
+- [x] `experiments/noise_est.py`: `--part kodak` (estimator accuracy), `--part polyu [--cbm3d]`
+      (rules mad / mad+floor / pca, all tuned on the 10 validation images, results on the 90 test images)
+- [x] SIDD loader `sidd()` + `experiments/sidd.py` (resumable; sigma rule taken from the PolyU tuning,
+      nothing tuned on SIDD; `--oracle` optional)
+- [x] `SIDD=1 bash scripts/setup_data.sh` (440 MB zip from the Restormer mirror; official server is down)
+- [x] `scripts/run_final.sh` runs everything; `fill_report_tables.py` has sections F.1–F.3
+
+### Run on the VPS (CUDA + many CPU cores)
+```bash
+git clone -b final-phase https://github.com/Lokesh-Kudipudi/DLCV_M2026.git && cd DLCV_M2026
+pip install torch --index-url https://download.pytorch.org/whl/cu124 && pip install -r requirements.txt
+bash scripts/setup_data.sh                      # Kodak + PolyU (data/ is git-ignored)
+PYTHON=python scripts/run_final.sh              # + FULL=1 to also regenerate the progress-report CSVs
+git add results && git commit -m "Final-phase results" && git push
+```
+Expected time on a T4-class GPU + 16–32 cores: noise_est polyu ~15 min (+ CBM3D ~15 min),
+SIDD Haar-tSVD ~10 min, SIDD CBM3D ~10–20 min; FULL=1 adds ~2–3 h (CBM3D on Kodak/PolyU is serial).
+- [ ] Run on the VPS and push `results/`
+- [ ] Pull here; write report sections from `results/report_tables.md` (F.1–F.3)
+
+### Still not implemented
+- [ ] DND submission (needs registration on the DND site; server-side evaluation)
+- [ ] Case-specific `TAU_SCALE` for high noise (Kodak case 2 peaks at f = 1.2), report as tuned, not blind
+- [ ] sigma sweep / own `TAU_SCALE` for Local-tSVD+PCA (MSt-SVD stand-in is 0.4–1.7 dB below paper)
+- [ ] Eigenvalue-rank adaptive sigma (paper Eq. 23) without the CNN
 - [ ] Optional: FCN refinement of the mean patch (RA-Haar-tSVD)
