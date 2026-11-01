@@ -1,0 +1,47 @@
+rule mad+floor, kappa 24.0, floor 16.0, CBM3D kappa 19.2, floor 12.8
+Haar-tSVD: 1280 blocks left
+  [100/1280]
+  [200/1280]
+  [300/1280]
+  [400/1280]
+  [500/1280]
+  [600/1280]
+  [700/1280]
+  [800/1280]
+  [900/1280]
+  [1000/1280]
+  [1100/1280]
+  [1200/1280]
+Haar-tSVD (oracle sigma): 1280 blocks left
+CBM3D: 1280 blocks left, 8 workers
+  [50/1280] CBM3D
+  [100/1280] CBM3D
+  [150/1280] CBM3D
+  [200/1280] CBM3D
+  [250/1280] CBM3D
+  [300/1280] CBM3D
+  [350/1280] CBM3D
+  [400/1280] CBM3D
+  [450/1280] CBM3D
+  [500/1280] CBM3D
+  [550/1280] CBM3D
+  [600/1280] CBM3D
+  [650/1280] CBM3D
+  [700/1280] CBM3D
+  [750/1280] CBM3D
+  [800/1280] CBM3D
+  [850/1280] CBM3D
+  [900/1280] CBM3D
+  [950/1280] CBM3D
+  [1000/1280] CBM3D
+  [1050/1280] CBM3D
+  [1100/1280] CBM3D
+  [1150/1280] CBM3D
+  [1200/1280] CBM3D
+  [1250/1280] CBM3D
+| method | rule | kappa | psnr | ssim | time | n |
+|---|---|---|---|---|---|---|
+| Noisy input |  |  | 23.66 | nan | 0.00 | 1280 |
+| Haar-tSVD | mad+floor | 24.0 | 33.56 | 0.8822 | 0.12 | 1280 |
+| Haar-tSVD (oracle sigma) | mad+floor |  | 33.38 | 0.7544 | 0.00 | 1280 |
+| CBM3D | mad+floor | 19.2 | 33.31 | 0.8673 | 34.40 | 1280 |
