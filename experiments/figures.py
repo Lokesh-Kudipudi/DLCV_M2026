@@ -31,7 +31,7 @@ def comparison(prefix, crop, out):
         ax.set_title(title, fontsize=10)
         ax.axis("off")
     fig.tight_layout()
-    fig.savefig(FIG / out, dpi=130)
+    fig.savefig(FIG / out, dpi=130, bbox_inches="tight")
     plt.close(fig)
 
 
